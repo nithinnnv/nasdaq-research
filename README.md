@@ -33,7 +33,7 @@ Two hard API constraints that shape everything: **30 requests/minute** and a
 **365-day maximum window per request**. `data/throttle.py` handles the first;
 `StockEODClient.fetch` chunks transparently for the second.
 
-## The two data hazards
+## The three data hazards
 
 **1. Prices are unadjusted.** ThetaData serves raw prices at every tier. NVDA
 closes 1208.88 on 2024-06-07 and opens 120.45 on 2024-06-10 — a 10:1 split that
@@ -43,10 +43,28 @@ ratio near a known split ratio **and** a corroborating step in median volume.
 Validated at **21/21** against seven confirmed Nasdaq splits (NVDA, AVGO, MSTR,
 SMCI, LRCX, PANW, NFLX) and fourteen non-splitting controls.
 
+The sub-$1 price floor applies **after** the event, never before it. Gating on
+the prior close reads as the same noise filter and is not: Nasdaq's continued-
+listing rule requires a $1 minimum bid, so a company reverse-splits precisely
+*because* it is trading under a dollar. A pre-event floor excluded the entire
+reverse-split population by construction. Correcting it recovered **99 reverse
+splits** across the cache (9 → 108) while leaving forward detections unchanged
+at 62 and losing nothing; every recovered event had median volume fall by the
+detected ratio, which is the independent confirmation. BYND's 1:30 was among
+the misses.
+
 **2. Bad prints survive into the aggregates.** NVDA's 2024-06-10 bar reports a
 high of 195.95 on a session that traded 117–123. Anything reading `high`/`low`
 needs outlier filtering; `close` and `open` were clean across every symbol
 checked.
+
+**3. Untraded sessions arrive as zero bars.** The feed returns a fully-zeroed
+row for a session a symbol did not trade, and occasionally a partly-zeroed one
+(a real open against a zeroed high/low/close) — **3,767 rows across 175 of the
+first 600 cached symbols**. These are worse than missing: `pct_change()` across
+a zero prints −1 going in and `inf` coming out, and an `inf` survives every
+rank, rolling window and mean downstream. `dataset.load_symbol` drops them at
+load, before split detection can read their ratios.
 
 ## What no ThetaData tier provides
 
@@ -93,6 +111,15 @@ Parquet cache makes any run resumable.
   the code clamps automatically, so it is a re-run, not a rewrite.
 - **Survivorship bias.** The listing file is a snapshot of *live* listings.
   Anything delisted mid-window is absent, biasing any historical study upward.
+- **Corporate actions beyond splits are still unhandled.** After the reverse-
+  split fix, 182 overnight moves above 50% remain in the first 600 symbols. Of
+  those, 53 still land near a known ratio (volume corroboration rejected them)
+  and 129 fall outside the ratio list entirely, with implied ratios like 195:1
+  and 56:1 that match no standard split. The likely causes are splits
+  concurrent with a large price move, and ticker recycling — a delisted shell's
+  symbol reissued to a different company, whose history the per-symbol cache
+  silently concatenates. Until the Splits endpoint is available on VALUE,
+  winsorize returns rather than trusting the tail.
 - **NBBO timing.** The `bid`/`ask` on each row are stamped ~17:15 ET, after the
   close, so they do not correspond to the `close` price. Use them for spread
   estimation, not for fill modelling.

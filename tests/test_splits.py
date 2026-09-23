@@ -93,3 +93,41 @@ def test_adjustment_preserves_the_current_segment():
 def test_empty_and_short_inputs_are_safe():
     assert detect_splits(pd.DataFrame(), "TEST") == []
     assert detect_splits(series(n=1), "TEST") == []
+
+
+# --- the price floor applies after the event, not before --------------------
+#
+# Gating on the prior close excluded reverse splits as a class: Nasdaq requires
+# a $1 minimum bid, so a company reverse-splits precisely because it is trading
+# below a dollar. A pre-event floor is therefore not a noise filter for this
+# population, it is a blanket exclusion of it. Across the live cache the fix
+# recovered 99 reverse splits and lost nothing -- forward detections were
+# unchanged at 62, and every recovered event had volume fall by the ratio.
+
+@pytest.mark.parametrize("ratio,start", [(0.1, 0.40), (0.05, 0.25), (1 / 30, 0.40)])
+def test_detects_reverse_splits_from_below_a_dollar(ratio, start):
+    """The real shape: a sub-$1 stock reverse-splitting up to a few dollars."""
+    ev = detect_splits(series(split_at=30, ratio=ratio, start_price=start), "TEST")
+    assert len(ev) == 1
+    assert ev[0].ratio == pytest.approx(ratio)
+
+
+def test_penny_stock_noise_below_the_floor_is_still_rejected():
+    """The floor's original job: a sub-$1 move that lands sub-$1 is not a split.
+
+    A 2x price step on a $0.30 stock has the ratio of a 1:2 reverse, but it
+    ends at $0.60 -- no real reverse split leaves the stock under a dollar,
+    which is the whole reason the company did it.
+    """
+    assert detect_splits(series(split_at=30, ratio=0.5, start_price=0.30), "TEST") == []
+
+
+def test_reverse_split_still_needs_the_volume_step():
+    """Recovering reverse splits must not weaken the corroboration rule.
+
+    A sub-$1 stock that genuinely rallies 10x on news has the price ratio of a
+    1:10 reverse. Only the share count separates them, and news does not cut it.
+    """
+    df = series(split_at=30, ratio=0.1, start_price=0.40)
+    df.loc[30:, "volume"] = 1_000_000  # share count never changed
+    assert detect_splits(df, "TEST") == []

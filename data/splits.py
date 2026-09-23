@@ -69,6 +69,16 @@ def _price_tol(ratio: float) -> float:
 # 5.9x-8.6x against a 3.16x bar; PANW's 2:1 ran 1.84x against 1.41x).
 VOLUME_SANITY_MULTIPLE = 3.0  # guards against unrelated volume explosions
 VOLUME_WINDOW = 10  # sessions each side of the event
+# The floor applies to the price AFTER the event, never before it. Gating on
+# the prior close looks equivalent and is not: Nasdaq's continued-listing rule
+# requires a $1 minimum bid, so a company reverse-splits *precisely because* it
+# is trading below a dollar. A pre-event floor therefore excludes the entire
+# reverse-split population by construction -- it was silently dropping 39 real
+# reverse splits in the first 600 cached symbols alone, BYND's 1:30 among them.
+# Post-event, a genuine split of either direction lands well clear of $1, while
+# sub-$1 tick noise does not, so the floor still does the job it was written
+# for. The ratio list supplies the other side: nothing below 1/100 can match,
+# which bounds how cheap the prior close is allowed to be.
 MIN_PRICE = 1.0    # sub-$1 tick noise produces meaningless ratios
 MIN_VOLUME = 10_000
 
@@ -118,7 +128,7 @@ def detect_splits(df: pd.DataFrame, symbol: str | None = None) -> List[SplitEven
     events: List[SplitEvent] = []
     for i in range(1, len(d)):
         pc, po = prev_close[i], d["open"][i]
-        if not (pc > MIN_PRICE and po > MIN_PRICE):
+        if not (pc > 0 and po > MIN_PRICE):
             continue
         # Medians either side, excluding the event day itself.
         before = vol[max(0, i - VOLUME_WINDOW):i]
