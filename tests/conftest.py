@@ -30,6 +30,9 @@ def make_bars(symbol: str, n_days: int = 80, start_price: float = 100.0,
               start: date = date(2024, 1, 2), seed: int = 0,
               split_at: int | None = None, split_ratio: float = 10.0,
               bad_print_at: int | None = None,
+              zero_at: tuple[int, ...] = (),
+              partial_zero_at: tuple[int, ...] = (),
+              zero_open_at: tuple[int, ...] = (),
               base_volume: int = 1_000_000) -> pd.DataFrame:
     """One symbol's daily bars, with optional split and bad-print hazards.
 
@@ -37,6 +40,12 @@ def make_bars(symbol: str, n_days: int = 80, start_price: float = 100.0,
     from that index on -- the unadjusted discontinuity the real feed serves.
     `bad_print_at` inflates that session's `high` without touching open/close,
     which is the exact shape of NVDA's 2024-06-10 bar.
+
+    Three shapes of zero bar, all present in the live cache:
+    `zero_at` is fully zeroed -- the feed's marker for a session the symbol
+    did not trade. `partial_zero_at` is a real open against a zeroed
+    high/low/close. `zero_open_at` is the reverse: a real close with the open
+    missing, which is the only one of the three that leaves a usable bar.
     """
     rng = np.random.default_rng(seed)
     rows, price, volume, day = [], start_price, base_volume, start
@@ -52,6 +61,27 @@ def make_bars(symbol: str, n_days: int = 80, start_price: float = 100.0,
         hi, lo = max(o, c) * 1.004, min(o, c) * 0.996
         if bad_print_at is not None and i == bad_print_at:
             hi *= 1.6  # aggregate contaminated by a single bad print
+
+        if i in zero_at:
+            rows.append({"symbol": symbol, "date": day, "open": 0.0, "high": 0.0,
+                         "low": 0.0, "close": 0.0, "volume": 0, "bid": 0.0,
+                         "ask": 0.0, "count": 0})
+            day += timedelta(days=1)
+            continue
+        if i in zero_open_at:
+            rows.append({"symbol": symbol, "date": day, "open": 0.0,
+                         "high": round(hi, 4), "low": round(lo, 4),
+                         "close": round(c, 4), "volume": int(volume),
+                         "bid": round(c * 0.9995, 4), "ask": round(c * 1.0005, 4),
+                         "count": 300})
+            day += timedelta(days=1)
+            continue
+        if i in partial_zero_at:
+            rows.append({"symbol": symbol, "date": day, "open": round(o, 4),
+                         "high": 0.0, "low": 0.0, "close": 0.0, "volume": 6,
+                         "bid": 0.0, "ask": 0.0, "count": 1})
+            day += timedelta(days=1)
+            continue
 
         rows.append({
             "symbol": symbol, "date": day,
@@ -73,6 +103,8 @@ FIXTURE_SYMBOLS = {
     "BBBB": dict(seed=2, start_price=1200.0, split_at=40, split_ratio=10.0),
     "CCCC": dict(seed=3, start_price=45.0, bad_print_at=25),
     "DDDD": dict(seed=4, start_price=30.0, n_days=12),
+    "EEEE": dict(seed=5, start_price=60.0, zero_at=(20, 21, 22),
+                 partial_zero_at=(50,), zero_open_at=(60,)),
 }
 
 

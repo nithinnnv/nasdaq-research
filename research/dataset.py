@@ -4,6 +4,13 @@ One frame, indexed (date, symbol), which is the shape every cross-sectional
 step downstream wants: rank a feature across names on a date, form deciles,
 measure what happened next.
 
+On zero bars: ThetaData emits a fully-zeroed row for a session a symbol did
+not trade, and occasionally a partly-zeroed one (a real open against a zeroed
+high/low/close). Those zeros are not prices, and they are far from harmless --
+`close.pct_change()` across a zero prints -1 going in and `inf` coming out,
+and an `inf` survives every rank, rolling window and mean downstream. They are
+removed here, at the point of load, so nothing below has to know about them.
+
 On split adjustment and lookahead: back-adjusting uses the knowledge that a
 split occurred, which you did not have beforehand. That is harmless for the
 *return* series -- adjustment only repairs the one discontinuous day, and every
@@ -24,6 +31,21 @@ from data.splits import adjust_for_splits, detect_splits
 CACHE = Path(__file__).resolve().parent.parent / "cache" / "bars"
 
 
+def _drop_untraded(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove zero-price bars, which mark sessions the symbol did not trade.
+
+    A non-positive close makes the whole bar unusable -- it anchors every
+    return -- so the row goes. A non-positive open, high or low alongside a
+    real close is a partial bad bar: only that field is voided, which costs
+    the day's overnight/intraday split but leaves close-to-close intact.
+    """
+    out = df[df["close"] > 0].copy()
+    for col in ("open", "high", "low"):
+        if col in out.columns:
+            out[col] = out[col].where(out[col] > 0)
+    return out.reset_index(drop=True)
+
+
 def load_symbol(symbol: str, adjust: bool = True) -> pd.DataFrame:
     path = CACHE / f"{symbol.replace('/', '_').replace('.', '_')}.parquet"
     if not path.exists():
@@ -32,6 +54,11 @@ def load_symbol(symbol: str, adjust: bool = True) -> pd.DataFrame:
     if df.empty:
         return df
     df = df.sort_values("date").reset_index(drop=True)
+    # Before anything reads a price: zero bars are not prices, and split
+    # detection would read their ratios as events.
+    df = _drop_untraded(df)
+    if df.empty:
+        return df
     # Raw close is kept so price-level filters can stay point-in-time.
     df["raw_close"] = df["close"]
     if adjust:
