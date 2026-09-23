@@ -1,5 +1,7 @@
 # nasdaq-research
 
+[![tests](https://github.com/nithinnnv/nasdaq-research/actions/workflows/ci.yml/badge.svg)](https://github.com/nithinnnv/nasdaq-research/actions/workflows/ci.yml)
+
 Directional equity research over Nasdaq-listed common stock, on daily bars from
 a local ThetaData Terminal. Swing horizon (days to weeks).
 
@@ -103,9 +105,15 @@ data/theta_stock.py  EOD client: chunking, tier errors, retry policy
 data/splits.py       split detection + back-adjustment
 data/universe.py     Nasdaq listing + ThetaData intersection
 scripts/backfill.py  resumable two-phase backfill
-tests/               16 tests, no network required
+tests/               65 tests: synthetic fixtures, no network, no subscription
 ```
 
 ```bash
 python -m pytest tests/ -q
 ```
+
+The suite builds its own data -- `tests/conftest.py` generates a synthetic
+`cache/bars/` containing the hazards worth testing against (a 10:1 split, a
+high contaminated by a bad print, an IPO too short to resolve the long
+windows). Nothing here needs the Terminal, a subscription, or a network, so
+the same command runs in CI on every push.
